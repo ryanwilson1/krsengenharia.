@@ -17,7 +17,11 @@
            || coarse
            || m("(prefers-reduced-motion:reduce)").matches
            || (coarse && navigator.deviceMemory && navigator.deviceMemory <= 4);
+  /* KRS_LIGHT  = sem abertura cinematográfica e sem scroll suave.
+     KRS_NO3D    = sem modelo 3D. Só quem pede menos movimento fica sem ele:
+                   o celular continua com a estrutura girando. */
   window.KRS_LIGHT = !!light;
+  window.KRS_NO3D  = m("(prefers-reduced-motion:reduce)").matches;
   document.documentElement.classList.add(light ? "krs-light" : "krs-full");
 
   /* Rede de segurança: se o JavaScript principal não rodar — CDN fora do ar,
@@ -1134,11 +1138,15 @@ body.lock{position:fixed;left:0;right:0;width:100%;overflow:hidden;overscroll-be
   body::before{background:radial-gradient(90vw 50vh at 70% -8%,rgba(30,94,255,.14),transparent 64%)}
 }
 
-/* ---- 8. versão leve: sem WebGL, sem abertura, sem rolagem morta ---- */
+/* ---- 8. versão leve: sem abertura e sem rolagem morta ----
+   O modelo 3D continua: só a abertura cinematográfica sai de cena. */
 html.krs-light .intro,html.krs-light .intro__bg{display:none!important}
 html.krs-light #stage{opacity:0}
 html.krs-light .journey{height:230svh}
 html.krs-light .fallback svg{width:min(64vw,380px)}
+/* o canvas acompanha a tela pelo CSS; assim a barra de endereço do celular
+   não obriga o three.js a recriar o buffer a cada rolagem */
+#stage canvas{width:100%!important;height:100%!important;display:block}
 @media(max-width:960px){
   .hero{padding-top:calc(118px + var(--safe-t))}
 }
@@ -1886,8 +1894,8 @@ html.krs-light .fallback svg{width:min(64vw,380px)}
 </div>
 
 <script>
-/* Carregador: o celular baixa só GSAP + ScrollTrigger (~45 KB comprimidos).
-   O three.js e o Lenis ficam para as telas que realmente os aproveitam. */
+/* Carregador: cada biblioteca entra só onde faz diferença.
+   O Lenis fica só para o desktop; no toque a rolagem nativa já é melhor. */
 (function(){
   var CDN = "https://cdnjs.cloudflare.com/ajax/libs/";
   var started = false;
@@ -1910,10 +1918,8 @@ html.krs-light .fallback svg{width:min(64vw,380px)}
   }
   var jobs = [ load(CDN + "gsap/3.12.5/gsap.min.js").then(function(){
                  return load(CDN + "gsap/3.12.5/ScrollTrigger.min.js"); }) ];
-  if (!window.KRS_LIGHT){
-    jobs.push(load(CDN + "three.js/r128/three.min.js"));
-    jobs.push(load(CDN + "lenis/1.1.14/lenis.min.js"));
-  }
+  if (!window.KRS_NO3D)  jobs.push(load(CDN + "three.js/r128/three.min.js"));
+  if (!window.KRS_LIGHT) jobs.push(load(CDN + "lenis/1.1.14/lenis.min.js"));
   Promise.all(jobs).then(start);
   /* rede ruim ou CDN fora do ar: o site abre mesmo assim, sem animação */
   setTimeout(start, 5000);
@@ -2010,13 +2016,15 @@ window.KRSBoot = function(){
     isWide:function(){ return innerWidth > 960; }
   };
 
-  if (HAS_3D && !LIGHT) K = (function(){
+  if (HAS_3D && !REDUCED) K = (function(){
     var stage = $("#stage");
     var scene = new THREE.Scene();
     var camera = new THREE.PerspectiveCamera(38, innerWidth/innerHeight, .1, 120);
     camera.position.set(0, 2.4, 11.5);
     var renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true, powerPreference:"high-performance" });
-    renderer.setPixelRatio(Math.min(devicePixelRatio||1, 2));
+    /* Num aparelho com DPR 3 a tela cheia custa 9x mais pixels por quadro.
+       Em 1.5 as linhas do modelo continuam limpas e o telefone respira. */
+    renderer.setPixelRatio(Math.min(devicePixelRatio || 1, COARSE ? 1.5 : 2));
     renderer.setSize(innerWidth, innerHeight);
     stage.appendChild(renderer.domElement);
 
@@ -2106,9 +2114,17 @@ window.KRSBoot = function(){
       wide = innerWidth > 960;
       rig.position.x = wide ? 1.75 : 0;
       rig.scale.setScalar(wide ? Math.min(1, innerWidth/1500) : .62);
-      stage.style.opacity = (dimAllowed && !wide) ? .22 : 1;
+      stage.style.opacity = (dimAllowed && !wide) ? .4 : 1;
     }
-    addEventListener("resize", resize, { passive:true });
+    var lastW = innerWidth, lastH = innerHeight, rzT = null;
+    function onResize(){
+      /* no celular a barra de endereço aparece e some o tempo todo, mudando
+         só a altura; recriar o buffer a cada vez travava a rolagem */
+      if (COARSE && innerWidth === lastW && Math.abs(innerHeight - lastH) < 160) return;
+      clearTimeout(rzT);
+      rzT = setTimeout(function(){ lastW = innerWidth; lastH = innerHeight; resize(); }, 160);
+    }
+    addEventListener("resize", onResize, { passive:true });
 
     var mx = 0, my = 0, tmx = 0, tmy = 0, spin = 0, explode = 0, scrollSpin = 0, visible = true;
     if (!REDUCED && !COARSE) addEventListener("mousemove", function(e){
@@ -2158,13 +2174,13 @@ window.KRSBoot = function(){
      presença justamente porque não concorre com o modelo 3D. */
   function stageOpacity(){
     if (!K.ok) return .55;
-    return K.isWide() ? 1 : .3;
+    return K.isWide() ? 1 : .4;
   }
 
   /* laço de render (não roda quando não há WebGL nem palco em cena) */
   (function loop(){
     if (!K.ok) return;                 /* nada a desenhar: nem agenda quadro */
-    if (K.isVisible()) K.render();
+    if (K.isVisible() && !document.hidden) K.render();
     requestAnimationFrame(loop);
   })();
 
